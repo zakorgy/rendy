@@ -7,6 +7,7 @@ repository = "https://github.com/omni-viral/rendy"
 license = "MIT OR Apache-2.0"
 documentation = "https://docs.rs/rendy-memory"
 keywords = ["graphics", "gfx-hal", "rendy"]
+description = "Rendy's resource manager"
 
 [dependencies]
 gfx-hal = "0.1"

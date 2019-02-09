@@ -2,13 +2,13 @@
 name = "rendy-mesh"
 version = "0.1.0"
 authors = ["omni-viral <scareaangel@gmail.com>"]
-description = "Crate for rendy to create and use meshes with vertex semantic"
 readme = "README.md"
 edition = "2018"
 repository = "https://github.com/omni-viral/rendy"
 license = "MIT OR Apache-2.0"
 documentation = "https://docs.rs/rendy-memory"
 keywords = ["graphics", "gfx-hal", "rendy"]
+description = "Rendy's mesh"
 
 [features]
 obj = ["wavefront_obj"]
