@@ -3,6 +3,12 @@ name = "rendy"
 version = "0.1.0"
 authors = ["omni-viral <scareaangel@gmail.com>"]
 edition = "2018"
+readme = "../README.md"
+repository = "https://github.com/omni-viral/rendy"
+license = "MIT OR Apache-2.0"
+documentation = "https://docs.rs/rendy-memory"
+keywords = ["graphics", "gfx-hal", "rendy"]
+description = "Higher-level graphics abstrations based on gfx-hal"
 
 [features]
 empty = ["rendy-factory/empty", "rendy-graph/empty", "rendy-wsi/empty", "gfx-backend-empty"]
