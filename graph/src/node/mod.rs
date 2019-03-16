@@ -665,7 +665,7 @@ pub fn gfx_release_barriers<'a, B: gfx_hal::Backend>(
             }
         }))
         .collect();
-    
+
     (bstart | istart..bend | iend, barriers)
 }
 

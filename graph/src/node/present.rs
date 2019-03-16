@@ -169,7 +169,10 @@ where
 {
     fn family(&self, factory: &mut Factory<B>, families: &[Family<B>]) -> Option<FamilyId> {
         // Find correct queue family.
-        families.iter().find(|family| factory.surface_support(family.id(), self.surface.raw())).map(Family::id)
+        families
+            .iter()
+            .find(|family| factory.surface_support(family.id(), self.surface.raw()))
+            .map(Family::id)
     }
 
     fn buffers(&self) -> Vec<(BufferId, BufferAccess)> {

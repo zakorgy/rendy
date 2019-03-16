@@ -20,6 +20,7 @@ no-slow-safety-checks = []
 [dependencies]
 rendy-memory = { version = "0.1.0", path = "../memory" }
 rendy-resource = { version = "0.1.0", path = "../resource" }
+rendy-util = { version = "0.1.0", path = "../util" }
 
 gfx-hal = "0.1"
 gfx-backend-empty = { version = "0.1.0", optional = true }

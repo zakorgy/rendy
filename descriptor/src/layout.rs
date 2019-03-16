@@ -6,6 +6,7 @@ pub use gfx_hal::{
     Backend, Device,
 };
 
+#[derive(Debug)]
 pub struct DescriptorSetLayout<B: Backend> {
     raw: B::DescriptorSetLayout,
     bindings: Vec<DescriptorSetLayoutBinding>,
@@ -16,12 +17,14 @@ impl<B> DescriptorSetLayout<B>
 where
     B: Backend,
 {
-    pub unsafe fn create(
+    pub fn create(
         device: &impl Device<B>,
         bindings: Vec<DescriptorSetLayoutBinding>,
     ) -> Result<Self, OutOfMemory> {
-        let raw =
-            device.create_descriptor_set_layout(&bindings, std::iter::empty::<B::Sampler>())?;
+        log::trace!("Creating new layout with bindings: {:?}", bindings);
+        let raw = unsafe {
+            device.create_descriptor_set_layout(&bindings, std::iter::empty::<B::Sampler>())
+        }?;
         Ok(DescriptorSetLayout {
             raw,
             bindings,

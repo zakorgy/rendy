@@ -21,6 +21,18 @@ macro_rules! rendy_slow_assert {
     }
 }
 
+/// Id usable that exists only if "no-slow-safety-checks" feature is enabled.
+/// Otherwise this is ZST.
+#[cfg(feature = "no-slow-safety-checks")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RendySlowId;
+
+/// Id usable that exists only if "no-slow-safety-checks" feature is enabled.
+/// Otherwise this is ZST.
+#[cfg(not(feature = "no-slow-safety-checks"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RendySlowId(pub u64);
+
 /// Chech if slice o f ordered values is sorted.
 pub fn is_slice_sorted<T: Ord>(slice: &[T]) -> bool {
     is_slice_sorted_by_key(slice, |i| i)

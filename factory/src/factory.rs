@@ -4,6 +4,7 @@ use {
             families_from_device, CommandPool, Families, Family, FamilyId, Fence, QueueType, Reset,
         },
         config::{Config, DevicesConfigure, HeapsConfigure, QueuesConfigure},
+        descriptor::{DescriptorAllocator, DescriptorSet, DescriptorSetLayout},
         memory::{Heaps, Write},
         resource::{
             buffer::{self, Buffer},
@@ -12,12 +13,12 @@ use {
             Epochs, Resources,
         },
         upload::{BufferState, ImageState, ImageStateOrLayout, Uploader},
-        util::rendy_slow_assert,
+        util::{rendy_slow_assert, RendySlowId},
         wsi::{Surface, Target},
     },
     gfx_hal::{
-        device::*, error::HostExecutionError, format, Adapter, Backend, Device, Features, Gpu,
-        Instance, Limits, PhysicalDevice, Surface as GfxSurface,
+        device::*, error::HostExecutionError, format, pso::DescriptorSetLayoutBinding, Adapter,
+        Backend, Device, Features, Gpu, Instance, Limits, PhysicalDevice, Surface as GfxSurface,
     },
     smallvec::SmallVec,
     std::{borrow::BorrowMut, cmp::max, mem::ManuallyDrop},
@@ -30,6 +31,7 @@ static FACTORY_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsi
 #[derive(derivative::Derivative)]
 #[derivative(Debug)]
 pub struct Factory<B: Backend> {
+    descriptor_allocator: ManuallyDrop<parking_lot::Mutex<DescriptorAllocator<B>>>,
     heaps: ManuallyDrop<parking_lot::Mutex<Heaps<B>>>,
     resources: ManuallyDrop<parking_lot::RwLock<Resources<B>>>,
     epochs: Vec<parking_lot::RwLock<Vec<u64>>>,
@@ -41,7 +43,7 @@ pub struct Factory<B: Backend> {
     adapter: Adapter<B>,
     #[derivative(Debug = "ignore")]
     instance: Box<dyn std::any::Any + Send + Sync>,
-    id: usize,
+    id: RendySlowId,
 }
 
 impl<B> Drop for Factory<B>
@@ -67,6 +69,12 @@ where
                 .dispose(&self.device);
         }
 
+        unsafe {
+            std::ptr::read(&mut *self.descriptor_allocator)
+                .into_inner()
+                .dispose(&self.device);
+        }
+
         log::trace!("Factory dropped");
     }
 }
@@ -76,7 +84,7 @@ where
     B: Backend,
 {
     /// Get this factory's unique id
-    pub fn id(&self) -> usize {
+    pub fn id(&self) -> RendySlowId {
         self.id
     }
 
@@ -181,7 +189,7 @@ where
         Ok(())
     }
 
-    /// Update buffer content.
+    /// Upload data to buffer.
     ///
     /// # Safety
     ///
@@ -205,7 +213,26 @@ where
             .upload_buffer(&self.device, buffer, offset, staging, last, next)
     }
 
-    /// Upload image.
+    /// Upload data from staging buffer to buffer.
+    ///
+    /// # Safety
+    ///
+    /// * Buffer must be created by this `Factory`.
+    /// * Buffer must not be used by device.
+    /// * `state` must match first buffer usage by device after content uploaded.
+    pub unsafe fn upload_staging_buffer<T>(
+        &self,
+        buffer: &mut Buffer<B>,
+        offset: u64,
+        staging: Buffer<B>,
+        last: Option<BufferState>,
+        next: BufferState,
+    ) -> Result<(), failure::Error> {
+        self.uploader
+            .upload_buffer(&self.device, buffer, offset, staging, last, next)
+    }
+
+    /// Upload data to image.
     ///
     /// # Safety
     ///
@@ -258,6 +285,55 @@ where
         )
     }
 
+    /// Upload data from staging buffer to image.
+    ///
+    /// # Safety
+    ///
+    /// * Image must be created by this `Factory`.
+    /// * Image must not be used by device.
+    /// * `state` must match first image usage by device after content uploaded.
+    pub unsafe fn upload_staging_image<T>(
+        &self,
+        image: &mut Image<B>,
+        data_width: u32,
+        data_height: u32,
+        image_layers: image::SubresourceLayers,
+        image_offset: image::Offset,
+        image_extent: image::Extent,
+        staging: Buffer<B>,
+        last: impl Into<ImageStateOrLayout>,
+        next: ImageState,
+    ) -> Result<(), failure::Error> {
+        assert_eq!(image.format().surface_desc().aspects, image_layers.aspects);
+        assert!(image_layers.layers.start <= image_layers.layers.end);
+        assert!(image_layers.layers.end <= image.kind().num_layers());
+        assert!(image_layers.level <= image.info().levels);
+
+        let format_desc = image.format().surface_desc();
+        let texels_count = (image_extent.width / format_desc.dim.0 as u32) as u64
+            * (image_extent.height / format_desc.dim.1 as u32) as u64
+            * image_extent.depth as u64;
+        let total_bytes = (format_desc.bits as u64 / 8) * texels_count;
+        assert_eq!(
+            total_bytes,
+            staging.size(),
+            "Size of must match size of the image region"
+        );
+
+        self.uploader.upload_image(
+            &self.device,
+            image,
+            data_width,
+            data_height,
+            image_layers,
+            image_offset,
+            image_extent,
+            staging,
+            last.into(),
+            next,
+        )
+    }
+
     /// Create rendering surface from window.
     pub fn create_surface(&mut self, window: std::sync::Arc<winit::Window>) -> Surface<B> {
         Surface::new(&*self.instance, window, self.id)
@@ -277,7 +353,7 @@ where
         Vec<gfx_hal::PresentMode>,
         Vec<gfx_hal::CompositeAlpha>,
     ) {
-        rendy_slow_assert!(surface.factory_id() == self.id);
+        assert_eq!(surface.instance_id(), self.id);
         unsafe { surface.compatibility(&self.adapter.physical_device) }
     }
 
@@ -287,7 +363,7 @@ where
     /// - Panics if `no-slow-safety-checks` feature is disabled and
     /// `surface` was not created by this `Factory`
     pub fn get_surface_format(&self, surface: &Surface<B>) -> format::Format {
-        rendy_slow_assert!(surface.factory_id() == self.id);
+        assert_eq!(surface.instance_id(), self.id);
         unsafe { surface.format(&self.adapter.physical_device) }
     }
 
@@ -296,8 +372,8 @@ where
     /// ## Panics
     /// - Panics if `no-slow-safety-checks` feature is disabled and
     /// `surface` was not created by this `Factory`
-    pub unsafe fn destroy_surface(&mut self, surface: Surface<B>) {
-        rendy_slow_assert!(surface.factory_id() == self.id);
+    pub fn destroy_surface(&mut self, surface: Surface<B>) {
+        assert_eq!(surface.instance_id(), self.id);
         drop(surface);
     }
 
@@ -316,7 +392,7 @@ where
         present_mode: gfx_hal::PresentMode,
         usage: gfx_hal::image::Usage,
     ) -> Result<Target<B>, failure::Error> {
-        rendy_slow_assert!(surface.factory_id() == self.id);
+        rendy_slow_assert!(surface.instance_id() == self.id);
         unsafe {
             surface.into_target(
                 &self.adapter.physical_device,
@@ -329,8 +405,8 @@ where
     }
 
     /// Destroy target returning underlying window back to the caller.
-    pub unsafe fn destroy_target(&self, target: Target<B>) {
-        target.dispose(&self.device);
+    pub fn destroy_target(&self, target: Target<B>) {
+        unsafe { target.dispose(&self.device) }
     }
 
     /// Get surface support for family.
@@ -354,8 +430,8 @@ where
     }
 
     /// Destroy semaphore
-    pub unsafe fn destroy_semaphore(&self, semaphore: B::Semaphore) {
-        self.device.destroy_semaphore(semaphore);
+    pub fn destroy_semaphore(&self, semaphore: B::Semaphore) {
+        unsafe { self.device.destroy_semaphore(semaphore) };
     }
 
     /// Create new fence
@@ -364,8 +440,8 @@ where
     }
 
     /// Wait for the fence become signeled.
-    pub unsafe fn reset_fence(&self, fence: &mut Fence<B>) -> Result<(), OutOfMemory> {
-        fence.reset(&self.device)
+    pub fn reset_fence(&self, fence: &mut Fence<B>) -> Result<(), OutOfMemory> {
+        unsafe { fence.reset(&self.device) }
     }
 
     /// Wait for the fence become signeled.
@@ -390,12 +466,12 @@ where
     }
 
     /// Wait for the fence become signeled.
-    pub unsafe fn wait_for_fence(
+    pub fn wait_for_fence(
         &self,
         fence: &mut Fence<B>,
         timeout_ns: u64,
     ) -> Result<bool, OomOrDeviceLost> {
-        if let Some(fence_epoch) = fence.wait_signaled(&self.device, timeout_ns)? {
+        if let Some(fence_epoch) = unsafe { fence.wait_signaled(&self.device, timeout_ns) }? {
             // Now we can update epochs counter.
             let family_index = self.families_indices[fence_epoch.queue.family().0];
             let mut lock = self.epochs[family_index].write();
@@ -494,12 +570,14 @@ where
         family.create_pool(&self.device).map_err(Into::into)
     }
 
-    /// Create new command pool for specified family.
-    pub unsafe fn destroy_command_pool<C, R>(&self, pool: CommandPool<B, C, R>)
+    /// Destroy command pool.
+    pub fn destroy_command_pool<C, R>(&self, pool: CommandPool<B, C, R>)
     where
         R: Reset,
     {
-        pool.dispose(&self.device);
+        unsafe {
+            pool.dispose(&self.device);
+        }
     }
 
     fn next_epochs(&mut self, families: &Families<B>) -> Epochs {
@@ -531,6 +609,8 @@ where
             self.resources
                 .get_mut()
                 .cleanup(&self.device, self.heaps.get_mut(), next, complete);
+
+            self.descriptor_allocator.get_mut().cleanup(&self.device);
         }
     }
 
@@ -543,6 +623,75 @@ where
     pub fn maintain(&mut self, families: &mut Families<B>) {
         self.flush_uploads(families);
         self.cleanup(families);
+    }
+
+    /// Create descriptor set layout with specified bindings.
+    pub fn create_descriptor_set_layout(
+        &self,
+        bindings: Vec<DescriptorSetLayoutBinding>,
+    ) -> Result<DescriptorSetLayout<B>, OutOfMemory> {
+        DescriptorSetLayout::create(&self.device, bindings)
+    }
+
+    /// Create descriptor set layout with specified bindings.
+    pub fn destroy_descriptor_set_layout(&self, layout: DescriptorSetLayout<B>) {
+        unsafe {
+            layout.dispose(&self.device);
+        }
+    }
+
+    /// Create descriptor sets with specified layout.
+    ///
+    /// # Safety
+    ///
+    /// `layout` must be created by this `Factory`.
+    ///
+    pub fn create_descriptor_set(
+        &self,
+        layout: &DescriptorSetLayout<B>,
+    ) -> Result<DescriptorSet<B>, OutOfMemory> {
+        let mut result = SmallVec::<[_; 1]>::new();
+        unsafe {
+            self.descriptor_allocator
+                .lock()
+                .allocate(&self.device, layout, 1, &mut result)?;
+        }
+        Ok(result.remove(0))
+    }
+
+    /// Create descriptor sets with specified layout.
+    ///
+    /// # Safety
+    ///
+    /// `layout` must be created by this `Factory`.
+    ///
+    pub fn create_descriptor_sets<E>(
+        &self,
+        layout: &DescriptorSetLayout<B>,
+        count: u32,
+    ) -> Result<E, OutOfMemory>
+    where
+        E: Default + Extend<DescriptorSet<B>>,
+    {
+        let mut result = E::default();
+        unsafe {
+            self.descriptor_allocator
+                .lock()
+                .allocate(&self.device, layout, count, &mut result)?;
+        }
+        Ok(result)
+    }
+
+    /// Destroy descriptor sets.
+    ///
+    /// # Safety
+    ///
+    /// `sets` must be created by this `Factory`.
+    ///
+    pub fn destroy_descriptor_sets(&self, sets: impl IntoIterator<Item = DescriptorSet<B>>) {
+        unsafe {
+            self.descriptor_allocator.lock().free(sets);
+        }
     }
 }
 
@@ -681,7 +830,11 @@ where
 
         let Gpu { device, mut queues } = unsafe { adapter.physical_device.open(&create_queues) }?;
 
-        let id = FACTORY_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(feature = "no-slow-safety-checks"))]
+        let id = RendySlowId(FACTORY_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) as u64);
+
+        #[cfg(feature = "no-slow-safety-checks")]
+        let id = RendySlowId;
 
         let families =
             unsafe { families_from_device(&mut queues, get_queues, &adapter.queue_families) };
@@ -705,6 +858,9 @@ where
         .collect();
 
     let factory = Factory {
+        descriptor_allocator: ManuallyDrop::new(
+            parking_lot::Mutex::new(DescriptorAllocator::new()),
+        ),
         heaps: ManuallyDrop::new(parking_lot::Mutex::new(heaps)),
         resources: ManuallyDrop::new(parking_lot::RwLock::new(Resources::new())),
         uploader: unsafe { Uploader::new(&device, &families) }?,
