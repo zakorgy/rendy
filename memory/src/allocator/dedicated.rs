@@ -100,6 +100,11 @@ where
             }
         }
     }
+
+    fn flush(&mut self, device: &B::Device) {
+        unsafe { self.memory.flush_mapped_memory_ranges(device, self.range()); }
+    }
+
 }
 
 /// Dedicated memory allocator that uses memory object per allocation requested.

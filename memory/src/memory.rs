@@ -66,6 +66,16 @@ where
         self.properties
             .contains(gfx_hal::memory::Properties::COHERENT)
     }
+
+    /// Flush the entire memory
+    pub unsafe fn flush_mapped_memory_ranges(&self, device: &B::Device, range: std::ops::Range<u64>) {
+        use gfx_hal::device::Device as _;
+        if self.host_coherent() {
+            device
+            .flush_mapped_memory_ranges(Some((self.raw(), range)))
+            .expect("Should flush successfully");
+        }
+    }
 }
 
 // pub(crate) fn memory_ptr_fmt(

@@ -321,4 +321,8 @@ where
     fn unmap(&mut self, device: &B::Device) {
         any_block!(&mut self.block => block.unmap(device))
     }
+
+    fn flush(&mut self, device: &B::Device) {
+        any_block!(&mut self.block => block.flush(device))
+    }
 }

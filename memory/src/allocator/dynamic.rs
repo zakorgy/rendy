@@ -98,6 +98,10 @@ where
 
     #[inline]
     fn unmap(&mut self, _device: &B::Device) {}
+
+    fn flush(&mut self, device: &B::Device) {
+        unsafe { self.shared_memory().flush_mapped_memory_ranges(device, self.range()); }
+    }
 }
 
 /// Config for `DynamicAllocator`.

@@ -193,9 +193,9 @@ where
             slice,
             flush: if !self.coherent.0 {
                 Some(move || {
-                    device
+                    /*device
                         .flush_mapped_memory_ranges(Some((memory.raw(), range)))
-                        .expect("Should flush successfully");
+                        .expect("Should flush successfully");*/
                 })
             } else {
                 None

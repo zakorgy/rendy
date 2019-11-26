@@ -33,4 +33,6 @@ pub trait Block<B: gfx_hal::Backend> {
     /// Release memory mapping. Must be called after successful `map` call.
     /// No-op if block is not mapped.
     fn unmap(&mut self, device: &B::Device);
+
+    fn flush(&mut self, device: &B::Device);
 }

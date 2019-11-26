@@ -97,6 +97,10 @@ where
     fn unmap(&mut self, _device: &B::Device) {
         debug_assert!(self.memory.host_visible());
     }
+
+    fn flush(&mut self, device: &B::Device) {
+        unsafe { self.memory.flush_mapped_memory_ranges(device, self.range.clone()); }
+    }
 }
 
 /// Config for `LinearAllocator`.
